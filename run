@@ -1,0 +1,9 @@
+#!/usr/bin/env zsh
+
+source lib/functions
+source $(config urls)
+source $(config vm)
+
+sanitize_vars
+
+run_guest $@

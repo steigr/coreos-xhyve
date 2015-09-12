@@ -1,0 +1,13 @@
+
+# Which file to embed into InitRD (for OEM-like boot)
+#
+embedded_config=$(config cloud-config.yml)
+
+# File provided by nc at en0-nic
+#
+# loadable_config=$(config user_data)
+
+# cores, mem, disk, mem-max is 3072 MiB
+cpus=4
+mem=3072
+disk_size=8g

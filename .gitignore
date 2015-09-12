@@ -1,0 +1,7 @@
+uuid
+disks/**
+imgs/**
+*.yml
+config/**
+!config/urls
+!config/vm

@@ -1,0 +1,133 @@
+typeset -A urls
+
+no_err() {
+	$@ 2>/dev/null || true
+}
+silent() {
+	$@ >/dev/null 2>/dev/null
+}
+
+detached() {
+	$@ &>/dev/null &
+}
+
+config() {
+	mkdir -p $(dirname "config/$1")
+	echo "config/$1"
+}
+
+config_server() {
+	tmp=$(mktemp)
+	cat > $tmp
+	while true; do
+		(echo -e "HTTP/1.1 200 OK\n$(date)\n";cat $tmp) | silent nc -l $port
+	done
+}
+
+disk_image() {
+	echo "disks/vda.dd" 
+}
+
+create_disk() {
+	mkdir -p $(dirname $(disk_image))
+	disk_size=$(echo $disk_size | sed -e "s/t$/ tebibyte/" -e "s/g$/ gibibyte/" -e "s/m$/ mebibyte/")
+	blocks=$((( $(units $disk_size 'mebibyte' | head -n1 | awk '{print $2}') - 1 ))) 
+
+	dd if=/dev/zero of=$(disk_image) bs=1m count=1 seek=$blocks >/dev/null 2>/dev/null
+}
+
+disk() {
+	disk=$(no_err ls $(disk_image))
+	disk=${disk:-$(create_disk; disk)}
+	echo $disk
+}
+
+uuid() {
+	uuid=$(no_err cat $(config uuid))
+	uuid=${uuid:-$(uuidgen | tee $(config uuid))}
+	echo $uuid
+}
+
+image() {
+	image=$(no_err ls imgs/$1)
+	image=${image:-$(mkdir -p imgs; curl -Lo imgs/$1 $urls[$1]; image $1)}
+	echo $image
+}
+
+embed_config() {
+	gzip=$(no_err command -v pigz)
+	gzip=${gzip:-gzip}
+	tmp=$(mktemp -d)
+	mkdir -p ${tmp}/usr/share/oem
+	cp $2 ${tmp}/usr/share/oem
+	cat $1 | $gzip -d > ${tmp}/cpio
+	cd ${tmp}
+	find usr | pax -w -a -x sv4cpio -f cpio
+	$gzip -c -1 cpio > $(basename $1)
+	rm -rf usr cpio
+	detached "(sleep 10; rm -rf ${tmp})"
+	echo  ${tmp}/$(basename $1)
+}
+
+cmdline() {
+	cmdline="${cmdline} earlyprintk=serial console=ttyS0"
+	if [[ $installed = "true" ]]; then
+		cmdline="${cmdline} root=LABEL=ROOT usr=PARTLABEL=USR-A"
+		[[ -n ${loadable_config} ]] && $(cat $loadable_config) | detached config_server 
+	else
+		cmdline="${cmdline} cloud-config-url=http://$hip:$port"
+		cpus=2
+		mem=1024
+		detached config_server <<EO_INSTALLER &
+#cloud-config
+coreos:
+  units:
+  - name: installer.service
+    command: start
+    runtime: yes
+    content: |
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStartPre=/bin/sh -c 'cp /usr/share/oem/cloud-config.yml /tmp; coreos-install -d /dev/vda -C alpha; mount /dev/vda6 /mnt; cp /tmp/cloud-config.yml /mnt'
+      ExecStart=/usr/bin/true
+      ExecStartPost=/usr/sbin/poweroff
+EO_INSTALLER
+	fi
+	echo $cmdline
+}
+
+sanitize_vars() {
+	installed=$(test -f $(disk_image) && echo true || echo false)
+	embedded_config=$(no_err find $embedded_config) 
+	loadable_config=$(no_err find $loadable_config)
+	port=$(command port)
+	hip=$(ifconfig en0 | awk -F'inet ' '{print $2}' | awk '{print $1}' | xargs)
+	if [[ $((( $mem - 3072 ))) -gt 0 ]]; then
+		echo "Memory capped to 3072MiB"
+		mem=3072
+	fi	
+}
+
+guest_cmd() {
+	xhyve=$(command -v xhyve)
+	cmdline=$(cmdline)
+	vmlinuz=$(image coreos_production_pxe.vmlinuz)
+	[[ $installed = "false" ]] && \
+	initrd=$(embed_config $(image coreos_production_pxe_image.cpio.gz) $embedded_config)
+	smp="-c ${cpus} -A"
+	mem="-m ${mem}m"
+	hostbridge="-s 0:0,hostbridge"
+	superio="-s 31,lpc"
+	com1="-lcom1,stdio"
+	net="-s 2:0,virtio-net"
+	img_hdd="-s 4,virtio-blk,$(disk)"
+	uuid="-U $(uuid)"
+	extra_args=$@
+	echo "$xhyve $mem $smp $hostbridge $superio $com1 $net $img_hdd $uuid $extra_args -f kexec,$vmlinuz,$initrd,'$cmdline'"
+}
+
+run_guest() {
+	sh -c "$(guest_cmd) $@" || true
+	[[ $installed = "false" ]] && sh -c "$(guest_cmd) $@"
+}

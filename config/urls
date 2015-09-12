@@ -1,0 +1,4 @@
+#!/usr/bin/env zsh
+
+urls[coreos_production_pxe.vmlinuz]="http://alpha.release.core-os.net/amd64-usr/current/coreos_production_pxe.vmlinuz"
+urls[coreos_production_pxe_image.cpio.gz]="http://alpha.release.core-os.net/amd64-usr/current/coreos_production_pxe_image.cpio.gz"
